@@ -35,6 +35,9 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile
+      # Use the builder stage (has dev deps + source) for local hot reload.
+      # A plain `docker build` / CI targets the final production stage.
+      target: builder
     container_name: job_processor_api
     restart: unless-stopped
     command: npm run start:dev
@@ -60,6 +63,9 @@ services:
     build:
       context: ./worker
       dockerfile: Dockerfile
+      # Use the builder stage (has dev deps + source) for local hot reload.
+      # A plain `docker build` / CI targets the final production stage.
+      target: builder
     container_name: job_processor_worker
     restart: unless-stopped
     command: npm run start:dev

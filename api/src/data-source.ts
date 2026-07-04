@@ -11,6 +11,10 @@ export const AppDataSource = new DataSource({
   username: process.env.POSTGRES_USER ?? 'jobs',
   password: process.env.POSTGRES_PASSWORD ?? 'jobs',
   database: process.env.POSTGRES_DB ?? 'jobs',
+  ssl:
+    process.env.POSTGRES_SSL === 'true'
+      ? { rejectUnauthorized: false }
+      : false,
   entities: [Job],
   migrations: [__dirname + '/migrations/*.{ts,js}'],
 });

@@ -39,11 +39,7 @@ export class JobsService {
       }),
     );
 
-    await this.queue.add(job.type, {
-      jobId: job.id,
-      type: job.type,
-      value: dto.value,
-    });
+    await this.enqueue(job.id, job.type, dto.value);
 
     return job;
   }
@@ -63,13 +59,25 @@ export class JobsService {
     job.finishedAt = null;
     await this.jobs.save(job);
 
-    await this.queue.add(job.type, {
-      jobId: job.id,
-      type: job.type,
-      value: job.input.value,
-    });
+    await this.enqueue(job.id, job.type, job.input.value);
 
     return job;
+  }
+
+  // Enqueue using the DB id as the BullMQ job id. This makes enqueue
+  // idempotent: re-adding the same id while it is still queued/active is a
+  // no-op, which lets the reconciliation sweeper safely re-enqueue without
+  // creating duplicates.
+  private async enqueue(
+    jobId: string,
+    type: JobType,
+    value: number,
+  ): Promise<void> {
+    await this.queue.add(
+      type,
+      { jobId, type, value },
+      { jobId },
+    );
   }
 
   findAll(): Promise<Job[]> {

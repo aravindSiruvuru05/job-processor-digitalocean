@@ -13,63 +13,17 @@ Supported job types: `square` (n²) and `prime` (is n prime?).
 
 TypeScript, NestJS, BullMQ, TypeORM, Postgres, Redis, React, Redux Toolkit Query, Docker Compose.
 
-## Architecture
+## Request flow
 
-```mermaid
-flowchart LR
-    FE[Frontend] --> API[API] --> Q[Redis / BullMQ] --> W[Worker] --> DB[(Postgres)]
-    FE -. poll GET /jobs .-> API
-```
+The API returns as soon as the job is persisted and enqueued (steps 1–4); everything after the dashed line is asynchronous. Postgres is the source of truth, Redis/BullMQ is the transport.
 
-```text
-Frontend      →       API    →  Redis / BullMQ  →  Worker  →  Postgres
-    ↑                                                  
-    └─ poll GET /jobs ────┘
-```
+![Request to queue to worker sequence flow](docs/sequence-flow.svg)
 
-## Request → queue → worker flow
+## Job lifecycle
 
-The HTTP request returns as soon as the job is persisted and enqueued. Everything after that is asynchronous.
+A job moves `queued -> running -> completed | failed`. Failed jobs land in the Dead Letter Queue and can be re-queued under the same id via retry.
 
-```mermaid
-sequenceDiagram
-  actor U as User
-  participant FE as Frontend
-  participant API as API (NestJS)
-  participant DB as Postgres
-  participant Q as Redis / BullMQ
-  participant W as Worker
-
-  U->>FE: choose type + value, click Enqueue
-  FE->>API: POST /jobs { type, value }
-  API->>DB: INSERT job (status = queued)
-  API->>Q: add job { jobId, type, value }
-  API-->>FE: 201 { id, status: "queued" }
-
-  Note over Q,W: processing is decoupled from the HTTP response
-
-  Q->>W: deliver job
-  W->>DB: UPDATE status = running (startedAt)
-  W->>W: registry.resolve(type).handle(input) — ~5s mock work
-  alt handler succeeds
-    W->>DB: UPDATE status = completed, result
-  else handler throws
-    W->>DB: UPDATE status = failed, error
-  end
-
-  loop every 2s
-    FE->>API: GET /jobs
-    API->>DB: SELECT * ORDER BY createdAt DESC
-    API-->>FE: jobs[]
-  end
-  Note over FE: failed jobs render in the Dead Letter Queue<br/>section, tagged "needs human attention"
-
-  U->>FE: Retry (on a failed job)
-  FE->>API: POST /jobs/:id/retry
-  API->>DB: reset job → status = queued (clear result/error)
-  API->>Q: re-enqueue job
-  API-->>FE: 200 { status: "queued" }
-```
+![Job lifecycle diagram](docs/job-lifecycle.svg)
 
 ## API
 
@@ -176,6 +130,26 @@ npm run migration:generate -- src/migrations/DescribeChange
 ```
 
 Migrations live in `api/src/migrations/`.
+
+## Reliability & delivery guarantees
+
+The queue gives **at-least-once** delivery, so the system is built to tolerate duplicate and retried deliveries and process crashes.
+
+- **Automatic retry with backoff.** Jobs are enqueued with `attempts: 3` and exponential `backoff` ([`api/src/jobs/jobs.module.ts`](api/src/jobs/jobs.module.ts)). A transient failure (DB blip, timeout) is retried automatically; only a job that exhausts its attempts stays `failed` and lands in the Dead Letter Queue, where it can be retried by hand.
+- **Bounded Redis retention.** `removeOnComplete` and `removeOnFail` cap how many finished jobs are kept in Redis (by count and age), so the queue store does not grow without limit. Postgres remains the durable record.
+- **Idempotent, guarded status transitions.** The worker ([`worker/src/jobs/job.processor.ts`](worker/src/jobs/job.processor.ts)) claims a job with a conditional update — only a `queued`/`failed` row moves to `running`. A duplicate or stalled re-delivery of an already-running or completed job updates 0 rows and is skipped, so it never reprocesses or clobbers terminal state. Completion and failure writes are likewise guarded by `status = running`.
+- **Reconciliation sweeper.** A scheduled sweep ([`api/src/jobs/job-reconciliation.service.ts`](api/src/jobs/job-reconciliation.service.ts)) closes the two crash windows:
+  - **Orphaned enqueue (dual-write safety net):** a row persisted as `queued` whose `queue.add` never landed (crash between the DB write and the enqueue) is re-enqueued. Enqueue uses the DB id as the BullMQ job id, so re-adding a job that is already queued/active is a no-op — backlog jobs are never duplicated.
+  - **Zombie recovery:** a row stuck `running` past a timeout (worker crashed mid-flight) is reset to `queued` and re-enqueued.
+
+Tunable via environment variables (sensible defaults shown):
+
+| Variable                | Default | Purpose                                                                |
+| ----------------------- | ------- | ---------------------------------------------------------------------- |
+| `RECONCILE_INTERVAL_MS` | `15000` | How often the reconciliation sweep runs                                |
+| `RECONCILE_ORPHAN_MS`   | `30000` | Age after which a stuck `queued` row is re-enqueued                    |
+| `RECONCILE_ZOMBIE_MS`   | `60000` | Age after which a stuck `running` row is recovered (keep > longest job) |
+| `WORKER_CONCURRENCY`    | `5`     | Concurrent jobs per worker instance                                    |
 
 ## Design patterns
 

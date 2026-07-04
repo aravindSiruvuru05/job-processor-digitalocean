@@ -60,3 +60,39 @@ jobs:
 
       - name: Integration tests
         run: npm run test:integration
+
+  push-images:
+    name: Build & push image (${{ matrix.service }})
+    # Only publish after tests + build pass, and only on pushes to the
+    # default branch (not on pull requests).
+    needs: [test-build, integration]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, worker]
+    env:
+      # Full repository path in DigitalOcean Container Registry, e.g.
+      # registry.digitalocean.com/my-registry/api
+      IMAGE: registry.digitalocean.com/${{ vars.DOCR_NAME }}/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build image
+        run: |
+          docker build \
+            -t "$IMAGE:${{ github.sha }}" \
+            -t "$IMAGE:latest" \
+            ${{ matrix.service }}
+
+      - name: Push image
+        run: docker push --all-tags "$IMAGE"

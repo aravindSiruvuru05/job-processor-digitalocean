@@ -40,11 +40,11 @@ describe('JobsService', () => {
         input: { value: 9 },
       }),
     );
-    expect(queue.add).toHaveBeenCalledWith(JobType.SQUARE, {
-      jobId: 'job-1',
-      type: JobType.SQUARE,
-      value: 9,
-    });
+    expect(queue.add).toHaveBeenCalledWith(
+      JobType.SQUARE,
+      { jobId: 'job-1', type: JobType.SQUARE, value: 9 },
+      { jobId: 'job-1' },
+    );
     expect(job.id).toBe('job-1');
     expect(job.status).toBe(JobStatus.QUEUED);
   });
