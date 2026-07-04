@@ -9,6 +9,12 @@ A REST API backed by an async job queue. Jobs are submitted over HTTP and proces
 
 Supported job types: `square` (n²) and `prime` (is n prime?).
 
+## Architecture
+
+The frontend talks HTTP to the API. The API persists jobs to Postgres and enqueues them onto Redis/BullMQ, then returns immediately. The worker consumes from the queue and writes status/results back to Postgres, which the frontend reads by polling.
+
+![Architecture diagram](docs/architecture.svg)
+
 ## Stack
 
 TypeScript, NestJS, BullMQ, TypeORM, Postgres, Redis, React, Redux Toolkit Query, Docker Compose.

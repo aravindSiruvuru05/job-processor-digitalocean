@@ -19,6 +19,8 @@ const TYPE_OPTIONS: SelectOption<JobType>[] = Object.values(JobType).map(
   (type) => ({ value: type, label: type }),
 );
 
+
+
 export function App() {
   const { data: jobs = [] } = useGetJobsQuery(undefined, {
     pollingInterval: 2000,
