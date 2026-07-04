@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: job_processor_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: jobs
+      POSTGRES_PASSWORD: jobs
+      POSTGRES_DB: jobs
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobs -d jobs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    container_name: job_processor_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: job_processor_api
+    restart: unless-stopped
+    command: npm run start:dev
+    env_file:
+      - ./api/.env
+    environment:
+      # Override the .env's localhost values for the Docker network.
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    ports:
+      - "3002:3002"
+    volumes:
+      # Bind-mount source for hot reload; keep the image's node_modules.
+      - ./api:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: job_processor_worker
+    restart: unless-stopped
+    command: npm run start:dev
+    env_file:
+      - ./worker/.env
+    environment:
+      # Override the .env's localhost values for the Docker network.
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    volumes:
+      # Bind-mount source for hot reload; keep the image's node_modules.
+      - ./worker:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        # API owns migrations; let it boot/migrate first.
+        condition: service_started
+
+volumes:
+  postgres_data:
+  redis_data:
